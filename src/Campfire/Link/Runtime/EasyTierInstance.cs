@@ -69,21 +69,12 @@ namespace Campfire.Link.Runtime
             Directory.CreateDirectory(runtimeDirectory);
             string configPath = Path.Combine(runtimeDirectory, Guid.NewGuid().ToString("N") + ".toml");
             File.WriteAllText(configPath, config.ToToml(), new UTF8Encoding(false));
+            File.SetUnixFileMode(configPath, UnixFileMode.UserRead | UnixFileMode.UserWrite);
 
             int rpcPort = FindFreePort();
             var process = new Process
             {
-                StartInfo = new ProcessStartInfo(EasyTierPackage.CorePath)
-                {
-                    Arguments = $"-c \"{configPath}\" -r 127.0.0.1:{rpcPort} --multi-thread",
-                    WorkingDirectory = runtimeDirectory,
-                    UseShellExecute = false,
-                    CreateNoWindow = true,
-                    RedirectStandardOutput = true,
-                    RedirectStandardError = true,
-                    StandardOutputEncoding = Encoding.UTF8,
-                    StandardErrorEncoding = Encoding.UTF8,
-                },
+                StartInfo = Platform.ProcessSupervisor.StartInfo(EasyTierPackage.CorePath, configPath, rpcPort, runtimeDirectory),
                 EnableRaisingEvents = true,
             };
 
@@ -165,8 +156,12 @@ namespace Campfire.Link.Runtime
             {
                 if (!_process.HasExited)
                 {
-                    _process.Kill();
-                    _process.WaitForExit(3000);
+                    _process.StandardInput.Close();
+                    if (!_process.WaitForExit(3000))
+                    {
+                        Platform.ProcessSupervisor.TryKill(_process);
+                        _process.WaitForExit(3000);
+                    }
                 }
             }
             catch (Exception ex) when (ex is InvalidOperationException || ex is System.ComponentModel.Win32Exception)
@@ -195,7 +190,6 @@ namespace Campfire.Link.Runtime
 
             var start = new ProcessStartInfo(EasyTierPackage.CliPath)
             {
-                Arguments = $"-p 127.0.0.1:{_rpcPort} " + string.Join(" ", arguments.Select(QuoteArgument)),
                 WorkingDirectory = EasyTierPackage.InstallDirectory,
                 UseShellExecute = false,
                 CreateNoWindow = true,
@@ -204,6 +198,10 @@ namespace Campfire.Link.Runtime
                 StandardOutputEncoding = Encoding.UTF8,
                 StandardErrorEncoding = Encoding.UTF8,
             };
+
+            start.ArgumentList.Add("-p");
+            start.ArgumentList.Add($"127.0.0.1:{_rpcPort}");
+            foreach (string argument in arguments) start.ArgumentList.Add(argument);
 
             return await Task.Run(() =>
             {
@@ -219,6 +217,7 @@ namespace Campfire.Link.Runtime
                         return null;
                     }
 
+                    using var stopCli = cancellation.Register(() => Platform.ProcessSupervisor.TryKill(cli));
                     var stdout = cli.StandardOutput.ReadToEndAsync();
                     var stderr = cli.StandardError.ReadToEndAsync();
                     if (!cli.WaitForExit((int)CliTimeout.TotalMilliseconds))
@@ -312,13 +311,19 @@ namespace Campfire.Link.Runtime
         private static void StopLeftovers()
         {
             bool othersAlive = false;
-            foreach (var process in Process.GetProcessesByName(Path.GetFileNameWithoutExtension(EasyTierPackage.CorePath)))
+            string ownedDirectory = Path.Combine(LinkSettings.DataDirectory, "runtime");
+            Directory.CreateDirectory(ownedDirectory);
+            foreach (string ownerFile in Directory.EnumerateFiles(ownedDirectory, "*.owner"))
             {
-                using (process)
+                if (!int.TryParse(Path.GetFileNameWithoutExtension(ownerFile), out int pid)) continue;
+                Process candidate;
+                try { candidate = Process.GetProcessById(pid); }
+                catch (ArgumentException) { DeleteOwner(pid); continue; }
+                using (var process = candidate)
                 {
-                    string image = LauncherProcess.TryGetImagePath(process);
-                    if (image == null || !image.StartsWith(EasyTierPackage.InstallDirectory, StringComparison.OrdinalIgnoreCase))
-                        continue;
+                    var args = Platform.LinuxProcesses.Arguments(pid);
+                    if (!args.Contains(Platform.ProcessSupervisor.Command) || !args.Contains(EasyTierPackage.CorePath))
+                    { DeleteOwner(pid); continue; }
 
                     if (HasLivingOwner(process))
                     {
@@ -328,7 +333,7 @@ namespace Campfire.Link.Runtime
 
                     try
                     {
-                        process.Kill();
+                        Platform.ProcessSupervisor.TryKill(process);
                         process.WaitForExit(3000);
                         DeleteOwner(process.Id);
                         LinkLog.Info("Stopped a leftover network process " + process.Id + ".");

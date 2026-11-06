@@ -17,13 +17,13 @@ namespace Campfire.Worlds
     /// </remarks>
     internal sealed class RunningGame
     {
-        private readonly string _commandLine;
+        private readonly IReadOnlyList<string> _arguments;
 
-        private RunningGame(int processId, string gameDirectory, string commandLine)
+        private RunningGame(int processId, string gameDirectory, IReadOnlyList<string> arguments)
         {
             ProcessId = processId;
             GameDirectory = gameDirectory;
-            _commandLine = commandLine;
+            _arguments = arguments;
         }
 
         public int ProcessId { get; }
@@ -38,23 +38,17 @@ namespace Campfire.Worlds
         {
             // Only the part from "versions" on is compared.
             string marker = Path.DirectorySeparatorChar + "versions" + Path.DirectorySeparatorChar + version.Name + Path.DirectorySeparatorChar;
-            return _commandLine.Replace('/', Path.DirectorySeparatorChar).IndexOf(marker, StringComparison.OrdinalIgnoreCase) >= 0;
+            return _arguments.Any(a => a.Contains(marker, StringComparison.Ordinal));
         }
 
         /// <summary>Every running game whose command line names its game folder.</summary>
         public static IReadOnlyList<RunningGame> Find()
         {
             var games = new List<RunningGame>();
-            foreach (var process in Process.GetProcesses())
+            foreach (int pid in Platform.LinuxProcesses.JavaPids())
             {
-                using (process)
-                {
-                    if (!process.ProcessName.StartsWith("java", StringComparison.OrdinalIgnoreCase))
-                        continue;
-                    var game = Read(process.Id);
-                    if (game != null)
-                        games.Add(game);
-                }
+                var game = Read(pid);
+                if (game != null) games.Add(game);
             }
             return games;
         }
@@ -71,7 +65,7 @@ namespace Campfire.Worlds
         /// </summary>
         public InstalledVersion FindVersion()
         {
-            var arguments = GameAccount.Split(_commandLine);
+            var arguments = _arguments.ToList();
             int index = arguments.IndexOf("--version");
             if (index < 0 || index + 1 >= arguments.Count || arguments[index + 1].Length == 0
                 || arguments[index + 1].IndexOfAny(Path.GetInvalidFileNameChars()) >= 0)
@@ -81,14 +75,18 @@ namespace Campfire.Worlds
             // An isolated game folder is the version folder itself; otherwise it is read from the launcher's paths, such as the natives folder.
             var folders = new List<string>();
             string parent = Path.GetDirectoryName(GameDirectory);
-            if (parent != null && string.Equals(Path.GetFileName(parent), "versions", StringComparison.OrdinalIgnoreCase))
+            if (parent != null && string.Equals(Path.GetFileName(parent), "versions", StringComparison.Ordinal))
                 folders.Add(Path.GetDirectoryName(parent));
             folders.Add(GameDirectory);
-            string pattern = @"([A-Za-z]:\\[^""=;]*?)\\versions\\" + Regex.Escape(name) + @"\\";
-            foreach (Match match in Regex.Matches(_commandLine.Replace('/', '\\'), pattern, RegexOptions.IgnoreCase))
-                folders.Add(match.Groups[1].Value);
+            string classPath = ValueAfter(_arguments, "-cp") ?? ValueAfter(_arguments, "-classpath") ?? ValueAfter(_arguments, "--class-path");
+            foreach (string entry in (classPath ?? "").Split(Path.PathSeparator))
+            {
+                string marker = Path.DirectorySeparatorChar + "versions" + Path.DirectorySeparatorChar + name + Path.DirectorySeparatorChar;
+                int at = entry.IndexOf(marker, StringComparison.Ordinal);
+                if (at > 0) folders.Add(entry.Substring(0, at));
+            }
 
-            foreach (string folder in folders.Select(Full).Where(f => f != null).Distinct(StringComparer.OrdinalIgnoreCase))
+            foreach (string folder in folders.Select(Full).Where(f => f != null).Distinct(StringComparer.Ordinal))
             {
                 if (!Directory.Exists(Path.Combine(folder, "versions", name)))
                     continue;
@@ -101,17 +99,16 @@ namespace Campfire.Worlds
 
         private static RunningGame Read(int processId)
         {
-            string commandLine = GameAccount.ReadCommandLine(processId);
-            if (commandLine == null || commandLine.IndexOf("--gameDir", StringComparison.Ordinal) < 0)
-                return null;
+            var arguments = GameAccount.ReadArguments(processId);
+            string directory = Full(ValueAfter(arguments, "--gameDir") ?? "");
+            return directory == null ? null : new RunningGame(processId, directory, arguments);
+        }
 
-            var arguments = GameAccount.Split(commandLine);
-            int index = arguments.IndexOf("--gameDir");
-            if (index < 0 || index + 1 >= arguments.Count)
-                return null;
-
-            string directory = Full(arguments[index + 1]);
-            return directory == null ? null : new RunningGame(processId, directory, commandLine);
+        private static string ValueAfter(IReadOnlyList<string> arguments, string option)
+        {
+            for (int i = 0; i + 1 < arguments.Count; i++)
+                if (arguments[i] == option) return arguments[i + 1];
+            return null;
         }
 
         private static string Full(string path)

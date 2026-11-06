@@ -3,7 +3,6 @@ using System.Collections.Generic;
 using System.ComponentModel;
 using System.Linq;
 using System.Diagnostics;
-using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -47,140 +46,17 @@ namespace Campfire.Link.Minecraft
         /// <summary>The process listening on TCP <paramref name="port"/>, or 0 when none does.</summary>
         public static int FindProcess(int port)
         {
-            foreach (var (listening, pid) in ReadListeners(AfInet, 24, 8, 20).Concat(ReadListeners(AfInet6, 56, 20, 52)))
-            {
-                if (listening == port && pid > 0)
-                    return pid;
-            }
-            return 0;
+            return Platform.LinuxProcesses.Sockets(false).FirstOrDefault(s => s.Port == port).Pid;
         }
 
-        /// <summary>Whether process <paramref name="pid"/> holds a UDP socket on <paramref name="port"/>.</summary>
         public static bool HasUdpSocket(int port, int pid)
         {
-            return pid > 0 && ReadUdpSockets(AfInet, 12, 4, 8).Concat(ReadUdpSockets(AfInet6, 28, 20, 24))
-                .Any(s => s.Port == port && s.Pid == pid);
+            return pid > 0 && Platform.LinuxProcesses.Sockets(true, pid).Any(s => s.Port == port);
         }
 
         private static IEnumerable<int> GetJavaListeningPorts()
         {
-            var ports = new SortedSet<int>();
-            var names = new Dictionary<int, bool>();
-            foreach (var (port, pid) in ReadListeners(AfInet, 24, 8, 20).Concat(ReadListeners(AfInet6, 56, 20, 52)))
-            {
-                if (!names.TryGetValue(pid, out bool isJava))
-                {
-                    isJava = IsJava(pid);
-                    names[pid] = isJava;
-                }
-                if (isJava)
-                    ports.Add(port);
-            }
-            return ports;
+            return Platform.LinuxProcesses.Sockets(false).Select(s => s.Port).Distinct().OrderBy(p => p);
         }
-
-        private static bool IsJava(int pid)
-        {
-            try
-            {
-                using (var process = Process.GetProcessById(pid))
-                    return process.ProcessName.StartsWith("java", StringComparison.OrdinalIgnoreCase);
-            }
-            catch (Exception ex) when (ex is ArgumentException || ex is InvalidOperationException || ex is Win32Exception)
-            {
-                return false;
-            }
-        }
-
-        /// <summary>Reads (port, process id) pairs of listening sockets from the IP Helper table.</summary>
-        /// <param name="rowSize">Size of one row in bytes.</param>
-        /// <param name="portOffset">Offset of the local port within a row.</param>
-        /// <param name="pidOffset">Offset of the owning process id within a row.</param>
-        private static List<(int Port, int Pid)> ReadListeners(int family, int rowSize, int portOffset, int pidOffset)
-        {
-            var result = new List<(int, int)>();
-            int size = 0;
-            GetExtendedTcpTable(IntPtr.Zero, ref size, false, family, TcpTableOwnerPidListener, 0);
-
-            for (int attempt = 0; attempt < 3 && size > 0; attempt++)
-            {
-                IntPtr table = Marshal.AllocHGlobal(size);
-                try
-                {
-                    uint error = GetExtendedTcpTable(table, ref size, false, family, TcpTableOwnerPidListener, 0);
-                    if (error == ErrorInsufficientBuffer)
-                        continue;
-                    if (error != 0)
-                        break;
-
-                    int count = Marshal.ReadInt32(table);
-                    for (int i = 0; i < count; i++)
-                    {
-                        IntPtr row = table + 4 + i * rowSize;
-                        int rawPort = Marshal.ReadInt32(row, portOffset);
-                        // The port is stored in network byte order in the low 16 bits.
-                        int port = ((rawPort & 0xFF) << 8) | ((rawPort >> 8) & 0xFF);
-                        result.Add((port, Marshal.ReadInt32(row, pidOffset)));
-                    }
-                    break;
-                }
-                finally
-                {
-                    Marshal.FreeHGlobal(table);
-                }
-            }
-            return result;
-        }
-
-        /// <summary>Reads (port, process id) pairs of UDP sockets from the IP Helper table.</summary>
-        /// <param name="rowSize">Size of one row in bytes.</param>
-        /// <param name="portOffset">Offset of the local port within a row.</param>
-        /// <param name="pidOffset">Offset of the owning process id within a row.</param>
-        private static List<(int Port, int Pid)> ReadUdpSockets(int family, int rowSize, int portOffset, int pidOffset)
-        {
-            var result = new List<(int, int)>();
-            int size = 0;
-            GetExtendedUdpTable(IntPtr.Zero, ref size, false, family, UdpTableOwnerPid, 0);
-
-            for (int attempt = 0; attempt < 3 && size > 0; attempt++)
-            {
-                IntPtr table = Marshal.AllocHGlobal(size);
-                try
-                {
-                    uint error = GetExtendedUdpTable(table, ref size, false, family, UdpTableOwnerPid, 0);
-                    if (error == ErrorInsufficientBuffer)
-                        continue;
-                    if (error != 0)
-                        break;
-
-                    int count = Marshal.ReadInt32(table);
-                    for (int i = 0; i < count; i++)
-                    {
-                        IntPtr row = table + 4 + i * rowSize;
-                        int rawPort = Marshal.ReadInt32(row, portOffset);
-                        int port = ((rawPort & 0xFF) << 8) | ((rawPort >> 8) & 0xFF);
-                        result.Add((port, Marshal.ReadInt32(row, pidOffset)));
-                    }
-                    break;
-                }
-                finally
-                {
-                    Marshal.FreeHGlobal(table);
-                }
-            }
-            return result;
-        }
-
-        private const int AfInet = 2;
-        private const int AfInet6 = 23;
-        private const int TcpTableOwnerPidListener = 3;
-        private const int UdpTableOwnerPid = 1;
-        private const uint ErrorInsufficientBuffer = 122;
-
-        [DllImport("iphlpapi.dll", SetLastError = true)]
-        private static extern uint GetExtendedTcpTable(IntPtr table, ref int size, bool sort, int family, int tableClass, uint reserved);
-
-        [DllImport("iphlpapi.dll", SetLastError = true)]
-        private static extern uint GetExtendedUdpTable(IntPtr table, ref int size, bool sort, int family, int tableClass, uint reserved);
     }
 }

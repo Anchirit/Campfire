@@ -23,18 +23,12 @@ namespace Campfire
         /// <summary>Moves the data folder to its current name if it still has the old one.</summary>
         private static string PrepareDataDirectory()
         {
-            string root = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
-            string current = Path.Combine(root, "Campfire");
-            string earlier = Path.Combine(root, "PCLPlus");
-            try
-            {
-                if (!Directory.Exists(current) && Directory.Exists(earlier))
-                    Directory.Move(earlier, current);
-            }
-            catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException)
-            {
-                // The old folder is in use; a new one is started.
-            }
+            string configured = Environment.GetEnvironmentVariable("CAMPFIRE_DATA_DIR");
+            string root = Environment.GetEnvironmentVariable("XDG_DATA_HOME");
+            if (string.IsNullOrEmpty(root)) root = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".local", "share");
+            string current = Path.GetFullPath(string.IsNullOrEmpty(configured) ? Path.Combine(root, "campfire") : configured);
+            Directory.CreateDirectory(current);
+            File.SetUnixFileMode(current, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
             return current;
         }
 

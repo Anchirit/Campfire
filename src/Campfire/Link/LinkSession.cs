@@ -252,7 +252,7 @@ namespace Campfire.Link
         /// <summary>Opens a room for the LAN world on this computer.</summary>
         /// <param name="manualPort">The game port typed by the user, or <c>null</c> to detect it.</param>
         /// <param name="reuseCode">The invite code of an earlier room to open again, or <c>null</c> for a new one.</param>
-        public async void StartHost(int? manualPort, RoomCode reuseCode = null)
+        public async Task StartHost(int? manualPort, RoomCode reuseCode = null)
         {
             var run = Begin(LinkRole.Host);
             var token = run.Token;
@@ -323,7 +323,7 @@ namespace Campfire.Link
                 Stage = LinkStage.Ready;
                 LinkLog.Info($"Room {Mask(Code)} is open ({ConnectedNodes} nodes connected).");
                 RoomHistory.Record(true, Code, _self.Name);
-                Online.Telemetry.Count("link.host");
+                // CLI does not collect or send telemetry.
                 OnChanged();
                 if (LinkSettings.Voice)
                     _ = PrepareVoiceAsync(run, false);
@@ -454,7 +454,7 @@ namespace Campfire.Link
         // ======================== Guest ========================
 
         /// <summary>Joins the room behind <paramref name="code"/>.</summary>
-        public async void StartJoin(RoomCode code)
+        public async Task StartJoin(RoomCode code)
         {
             var run = Begin(LinkRole.Guest);
             var token = run.Token;
@@ -524,7 +524,7 @@ namespace Campfire.Link
                 LinkLog.Info($"Joined room {Mask(Code)}.");
                 var hostPlayer = Players.FirstOrDefault(p => p.Kind == PlayerKind.Host);
                 RoomHistory.Record(false, Code, hostPlayer?.Name);
-                Online.Telemetry.Count("link.join");
+                // CLI does not collect or send telemetry.
                 OnChanged();
                 _ = FetchHostModsAsync(run);
                 _ = FetchHostVoiceAsync(run);

@@ -6,7 +6,6 @@ using System.Net.Http;
 using System.Reflection;
 using System.Threading;
 using System.Threading.Tasks;
-using System.Windows.Media;
 using Campfire.Link;
 
 namespace Campfire.Online
@@ -56,9 +55,7 @@ namespace Campfire.Online
         public string ButtonUrl { get; set; }
 
         /// <summary>Title color chosen by the author, or <c>null</c> for the theme's.</summary>
-        public Color? TitleColor { get; set; }
 
-        public Color? BodyColor { get; set; }
     }
 
     /// <summary>What the service returns at startup.</summary>
@@ -192,8 +189,6 @@ namespace Campfire.Online
                         ButtonText = Get(item, "buttonText") as string,
                         // Only web pages are opened.
                         ButtonUrl = url != null && url.StartsWith("https://", StringComparison.OrdinalIgnoreCase) ? url : null,
-                        TitleColor = ParseColor(Get(item, "titleColor")),
-                        BodyColor = ParseColor(Get(item, "bodyColor")),
                     });
                 }
             }
@@ -222,15 +217,6 @@ namespace Campfire.Online
                     return null;
             }
             return new Version(numbers[0], numbers[1], numbers[2]);
-        }
-
-        /// <summary>Reads "#RRGGBB"; anything else means the theme color.</summary>
-        private static Color? ParseColor(object value)
-        {
-            if (!(value is string text) || text.Length != 7 || text[0] != '#'
-                || !int.TryParse(text.Substring(1), NumberStyles.HexNumber, CultureInfo.InvariantCulture, out int rgb))
-                return null;
-            return Color.FromRgb((byte)(rgb >> 16), (byte)(rgb >> 8), (byte)rgb);
         }
 
         /// <summary>The running version without its fourth part, for comparing with versions from the service.</summary>

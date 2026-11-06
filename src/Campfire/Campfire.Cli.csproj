@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <AssemblyName>campfire</AssemblyName>
+    <RootNamespace>Campfire</RootNamespace>
+    <Version>1.1.31</Version>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <EnableDefaultCompileItems>true</EnableDefaultCompileItems>
+    <NoWarn>$(NoWarn);SYSLIB0014</NoWarn>
+  </PropertyGroup>
+  <ItemGroup>
+    <EmbeddedResource Include="../java-agent/dist/CampfireAgent.jar" LogicalName="Campfire.CampfireAgent.jar" />
+    <EmbeddedResource Include="../java-agent/dist/CampfireHook.jar" LogicalName="Campfire.CampfireHook.jar" />
+    <EmbeddedResource Include="../java-agent/dist/CampfireAttach.jar" LogicalName="Campfire.CampfireAttach.jar" />
+    <EmbeddedResource Include="Link/Minecraft/Mappings/*.txt" LogicalName="Campfire.Mappings.%(Filename).txt" />
+  </ItemGroup>
+</Project>

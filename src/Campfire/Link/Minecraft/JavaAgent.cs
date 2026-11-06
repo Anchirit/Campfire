@@ -112,8 +112,6 @@ namespace Campfire.Link.Minecraft
                 string options = "state=" + LinkSettings.DataDirectory + (mappings != null ? "|mappings=" + mappings : "");
                 var startInfo = new ProcessStartInfo(java)
                 {
-                    Arguments = "--add-modules jdk.attach -cp " + Quote(attach) + " campfire.CampfireAttach "
-                                + processId.ToString(CultureInfo.InvariantCulture) + " " + Quote(agent) + " " + Quote(options),
                     WorkingDirectory = directory,
                     UseShellExecute = false,
                     CreateNoWindow = true,
@@ -123,12 +121,16 @@ namespace Campfire.Link.Minecraft
                     StandardErrorEncoding = Encoding.UTF8,
                 };
 
+                foreach (string argument in new[] { "--add-modules", "jdk.attach", "-cp", attach, "campfire.CampfireAttach",
+                    processId.ToString(CultureInfo.InvariantCulture), agent, options }) startInfo.ArgumentList.Add(argument);
+
                 using (var process = new Process { StartInfo = startInfo })
                 {
                     process.Start();
                     Task<string> output = process.StandardOutput.ReadToEndAsync();
                     Task<string> error = process.StandardError.ReadToEndAsync();
-                    bool exited = await Task.Run(() => process.WaitForExit(20000), cancellation).ConfigureAwait(false);
+                    using var stopBridge = cancellation.Register(() => Platform.ProcessSupervisor.TryKill(process));
+                    bool exited = await Task.Run(() => process.WaitForExit(20000), CancellationToken.None).ConfigureAwait(false);
                     if (!exited)
                     {
                         try
@@ -188,49 +190,26 @@ namespace Campfire.Link.Minecraft
 
         private static IEnumerable<string> AttachCandidates(string game)
         {
-            if (game != null)
-                yield return game;
-
-            var roots = new List<string>();
-            int runtime = game?.IndexOf("\\runtime\\", StringComparison.OrdinalIgnoreCase) ?? -1;
-            if (runtime > 0)
-                roots.Add(game.Substring(0, runtime + "\\runtime".Length));
-            roots.Add(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), ".minecraft", "runtime"));
-
+            if (game != null) yield return game;
             string home = Environment.GetEnvironmentVariable("JAVA_HOME");
-            if (!string.IsNullOrEmpty(home))
-                yield return Path.Combine(home, "bin", "java.exe");
-
-            foreach (var folder in new[] { Environment.SpecialFolder.ProgramFiles, Environment.SpecialFolder.ProgramFilesX86 })
+            if (!string.IsNullOrEmpty(home)) yield return Path.Combine(home, "bin", "java");
+            foreach (string root in new[] { "/usr/lib/jvm", "/opt/java", Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".minecraft", "runtime") })
             {
-                string programs = Environment.GetFolderPath(folder);
-                if (string.IsNullOrEmpty(programs))
-                    continue;
-                foreach (string vendor in new[] { "Java", "Eclipse Adoptium", "Microsoft", "Zulu", "BellSoft", "Amazon Corretto" })
-                    roots.Add(Path.Combine(programs, vendor));
+                if (!Directory.Exists(root)) continue;
+                foreach (string java in FindJavaFiles(root)) yield return java;
             }
-
-            foreach (string root in roots.Distinct(StringComparer.OrdinalIgnoreCase))
-            {
-                foreach (string java in FindJavaFiles(root))
-                    yield return java;
-            }
+            foreach (string directory in (Environment.GetEnvironmentVariable("PATH") ?? "").Split(Path.PathSeparator))
+                if (!string.IsNullOrEmpty(directory)) yield return Path.Combine(directory, "java");
         }
 
         private static IEnumerable<string> FindJavaFiles(string root)
         {
             try
             {
-                return Directory.Exists(root)
-                    ? Directory.EnumerateFiles(root, "java.exe", SearchOption.AllDirectories)
-                        .Where(f => string.Equals(Path.GetFileName(Path.GetDirectoryName(f)), "bin", StringComparison.OrdinalIgnoreCase))
-                        .ToList()
-                    : Enumerable.Empty<string>();
+                return Directory.EnumerateFiles(root, "java", new EnumerationOptions { RecurseSubdirectories = true, IgnoreInaccessible = true })
+                    .Where(f => Path.GetFileName(Path.GetDirectoryName(f)) == "bin").ToList();
             }
-            catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException)
-            {
-                return Enumerable.Empty<string>();
-            }
+            catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException) { return Enumerable.Empty<string>(); }
         }
 
         /// <summary>Whether <paramref name="java"/> has the attach module.</summary>
@@ -257,10 +236,10 @@ namespace Campfire.Link.Minecraft
                     using (var process = Process.Start(startInfo))
                     {
                         Task<string> error = process.StandardError.ReadToEndAsync();
-                        string output = process.StandardOutput.ReadToEnd();
-                        process.WaitForExit(10000);
-                        error.Wait(1000);
-                        supported = output.IndexOf("jdk.attach@", StringComparison.Ordinal) >= 0;
+                        var output = process.StandardOutput.ReadToEndAsync();
+                        if (!process.WaitForExit(10000)) Platform.ProcessSupervisor.TryKill(process);
+                        process.WaitForExit();
+                        supported = output.GetAwaiter().GetResult().IndexOf("jdk.attach@", StringComparison.Ordinal) >= 0;
                     }
                 }
             }
@@ -274,32 +253,7 @@ namespace Campfire.Link.Minecraft
             return supported;
         }
 
-        private static string FindJava(int processId)
-        {
-            try
-            {
-                using (var process = Process.GetProcessById(processId))
-                {
-                    string path = process.MainModule?.FileName;
-                    if (string.IsNullOrEmpty(path))
-                        return null;
-
-                    string directory = Path.GetDirectoryName(path);
-                    if (!string.IsNullOrEmpty(directory))
-                    {
-                        string console = Path.Combine(directory, "java.exe");
-                        if (File.Exists(console))
-                            return console;
-                    }
-                    return path;
-                }
-            }
-            catch (Exception ex) when (ex is ArgumentException || ex is InvalidOperationException
-                                       || ex is System.ComponentModel.Win32Exception || ex is NotSupportedException)
-            {
-                return null;
-            }
-        }
+        private static string FindJava(int processId) => Platform.LinuxProcesses.ImagePath(processId);
 
         private static string ResourceHash(string name)
         {

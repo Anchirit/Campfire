@@ -70,8 +70,8 @@ namespace Campfire.Link.Minecraft
         /// </summary>
         public static async Task<string> PrepareAsync(int processId, CancellationToken cancellation)
         {
-            string commandLine = await Task.Run(() => GameAccount.ReadCommandLine(processId), cancellation).ConfigureAwait(false);
-            var source = commandLine == null ? null : await Task.Run(() => FindSource(commandLine), cancellation).ConfigureAwait(false);
+            var arguments = await Task.Run(() => GameAccount.ReadArguments(processId), cancellation).ConfigureAwait(false);
+            var source = await Task.Run(() => FindSource(arguments), cancellation).ConfigureAwait(false);
             if (source == null)
                 return null;
 
@@ -125,9 +125,8 @@ namespace Campfire.Link.Minecraft
         /// Finds the version file of the running game and, following "inheritsFrom" to the release it is
         /// based on, the URL and SHA-1 of its client mappings.
         /// </summary>
-        internal static (string Url, string Sha1)? FindSource(string commandLine)
+        internal static (string Url, string Sha1)? FindSource(IReadOnlyList<string> arguments)
         {
-            var arguments = GameAccount.Split(commandLine);
             string versionFile = FindVersionFile(arguments);
             if (versionFile == null)
                 return null;
@@ -159,7 +158,7 @@ namespace Campfire.Link.Minecraft
         private static string FindVersionFile(IReadOnlyList<string> arguments)
         {
             string classPath = ValueAfter(arguments, "-cp") ?? ValueAfter(arguments, "-classpath") ?? ValueAfter(arguments, "--class-path");
-            var entries = (classPath ?? "").Split(';').Where(e => e.Length > 0).ToList();
+            var entries = (classPath ?? "").Split(Path.PathSeparator).Where(e => e.Length > 0).ToList();
             foreach (string entry in entries)
             {
                 string directory = Path.GetDirectoryName(entry);
@@ -173,11 +172,11 @@ namespace Campfire.Link.Minecraft
             }
 
             string version = ValueAfter(arguments, "--version");
-            string library = entries.Concat(arguments).FirstOrDefault(e => e.IndexOf("\\libraries\\", StringComparison.OrdinalIgnoreCase) > 0);
+            string library = entries.Concat(arguments).FirstOrDefault(e => e.IndexOf("/libraries/", StringComparison.OrdinalIgnoreCase) > 0);
             if (version == null || library == null)
                 return null;
-            string root = library.Substring(0, library.IndexOf("\\libraries\\", StringComparison.OrdinalIgnoreCase));
-            int start = root.LastIndexOfAny(new[] { ' ', '=', '"' });
+            string root = library.Substring(0, library.IndexOf("/libraries/", StringComparison.OrdinalIgnoreCase));
+            int start = root.StartsWith("-D", StringComparison.Ordinal) ? root.IndexOf('=') : -1;
             root = root.Substring(start + 1);
             string candidate = Path.Combine(root, "versions", version, version + ".json");
             return File.Exists(candidate) ? candidate : null;

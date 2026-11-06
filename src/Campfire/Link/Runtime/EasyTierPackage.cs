@@ -23,33 +23,17 @@ namespace Campfire.Link.Runtime
     {
         public const string Version = "2.6.4";
 
-        private const string CoreFile = "easytier-core.exe";
-        private const string CliFile = "easytier-cli.exe";
-        private const string PacketFile = "Packet.dll";
+        private const string CoreFile = "easytier-core";
+        private const string CliFile = "easytier-cli";
         private const int ProbeSize = 64 * 1024;
-
-        private static readonly string[] Files = { CoreFile, CliFile, PacketFile };
-
-        // SHA-256 of each file in the official release, in the order of Files.
+        public const string ArchiveSha256 = "61b659eaedba658fa66fe47d17e1426cdd77e5d02fa15fed447bb4357c09dfd6";
+        private static readonly string[] Files = { CoreFile, CliFile };
         private static readonly Dictionary<string, string[]> Hashes = new Dictionary<string, string[]>
         {
             ["x86_64"] = new[]
             {
-                "da7eb2d24b5416f3d3407636949e964a0750e3f9dc53a828cb6799a57ead445d",
-                "d8783e851e944b44a9b71b39fd02f227ec0a2a82b3165c55ead5dd32dcde53a1",
-                "c7c03a87eac7243ccbe331554624b18803010b740e311fc8cfddb573096eacac",
-            },
-            ["arm64"] = new[]
-            {
-                "da912e2befd4c59c81228c0dac7e19f0190aa4221475117108ad2f0045b3065d",
-                "295852b6d68ab5c675437f19f37e975e90d41814ec76eabc135d3eb367bfccd0",
-                "fe56bf638c1f05751a4f36377d71f48fb7f43446e92475eda32dc0f4f2ebd60c",
-            },
-            ["i686"] = new[]
-            {
-                "657400c756aa4e2868b9505f669527733ba872dff3b8877cee24d7772616c76b",
-                "e1d6a617e4cb3b9bf77c9d32616dace5d5715fabcbcb0f5f9969a98f3626d69a",
-                "f0ab4f5457bd48958b72d6849148e1ece6dbc1059435dfe695051fc32b8cdc19",
+                "35b854e0c5853c02733870488c977200f6aa06d09c08d5dc7f9f9e150e7be8d5",
+                "8da66644ec50dcf618fccf76780991f52dfbe2939797abc0efe0ef4d4c4d3383",
             },
         };
 
@@ -57,42 +41,14 @@ namespace Campfire.Link.Runtime
         private static bool _verified;
 
         /// <summary>"x86_64", "arm64" or "i686", matching the native processor of this computer.</summary>
-        public static string Architecture { get; } = DetectArchitecture();
-
-        /// <summary>The Windows version reported to a program that declares support for Windows 10 in its manifest.</summary>
-        public static Version WindowsVersion { get; } = Environment.OSVersion.Version;
-
-        /// <summary>The component runs on Windows 7 with Service Pack 1 and later.</summary>
-        public static bool IsSupportedSystem { get; } = WindowsVersion >= new Version(6, 1, 7601);
-
-        /// <summary>Windows 7, which needs two updates and cannot carry traffic over QUIC.</summary>
-        public static bool IsWindows7 { get; } = WindowsVersion < new Version(6, 2);
-
-        /// <summary>
-        /// Whether Windows 7 has the update that lets programs choose where libraries load from
-        /// (KB2533623, later replaced by KB3063858); the component does not start without it.
-        /// </summary>
-        public static bool HasLoaderUpdate
-        {
-            get
-            {
-                try
-                {
-                    IntPtr cookie = AddDllDirectory(Path.GetTempPath());
-                    if (cookie == IntPtr.Zero)
-                        return false;
-                    RemoveDllDirectory(cookie);
-                    return true;
-                }
-                catch (EntryPointNotFoundException)
-                {
-                    return false;
-                }
-            }
-        }
+        public static string Architecture { get; } = "x86_64";
+        public static bool IsSupportedSystem => OperatingSystem.IsLinux()
+            && RuntimeInformation.ProcessArchitecture == System.Runtime.InteropServices.Architecture.X64;
+        public static bool IsWindows7 => false;
+        public static bool HasLoaderUpdate => true;
 
         public static string InstallDirectory { get; } =
-            Path.Combine(AppSettings.DataDirectory, "EasyTier", Version + "-" + Architecture);
+            Path.Combine(AppSettings.DataDirectory, "EasyTier", Version + "-linux-" + Architecture);
 
         public static string CorePath => Path.Combine(InstallDirectory, CoreFile);
 
@@ -125,8 +81,21 @@ namespace Campfire.Link.Runtime
         /// <summary>Downloads whatever is missing or damaged, trying the fastest source first.</summary>
         public static async Task InstallAsync(IProgress<DownloadProgress> progress, CancellationToken cancellation)
         {
+            if (!IsSupportedSystem) throw new PlatformNotSupportedException("This port supports Linux x86_64 only.");
             if (await Task.Run(() => IsInstalled()).ConfigureAwait(false))
+            {
+                EnsureExecutable();
                 return;
+            }
+
+            // A portable distribution may include the unchanged, pinned upstream archive.
+            string bundled = Path.Combine(AppContext.BaseDirectory, "easytier-linux-x86_64-v2.6.4.zip");
+            if (File.Exists(bundled))
+            {
+                cancellation.ThrowIfCancellationRequested();
+                InstallArchive(bundled);
+                return;
+            }
 
             Directory.CreateDirectory(InstallDirectory);
             using (var client = CreateClient())
@@ -149,7 +118,10 @@ namespace Campfire.Link.Runtime
                         lock (Sync)
                             _verified = Files.All(IsFileValid);
                         if (_verified)
+                        {
+                            EnsureExecutable();
                             return;
+                        }
                         throw new InvalidDataException("Downloaded files failed verification.");
                     }
                     catch (Exception ex) when (!cancellation.IsCancellationRequested)
@@ -166,7 +138,7 @@ namespace Campfire.Link.Runtime
 
         private static IEnumerable<string> GetSourceUrls()
         {
-            string asset = $"easytier-windows-{Architecture}-v{Version}.zip";
+            string asset = $"easytier-linux-{Architecture}-v{Version}.zip";
             string github = $"https://github.com/EasyTier/EasyTier/releases/download/v{Version}/{asset}";
             yield return $"https://gitee.com/easytier/EasyTier/releases/download/v{Version}/{asset}";
             yield return github;
@@ -323,6 +295,7 @@ namespace Campfire.Link.Runtime
             }
             TryDelete(target);
             File.Move(temp, target);
+            File.SetUnixFileMode(target, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
         }
 
         // ======================== Helpers ========================
@@ -389,27 +362,6 @@ namespace Campfire.Link.Runtime
             return client;
         }
 
-        private static string DetectArchitecture()
-        {
-            try
-            {
-                if (IsWow64Process2(Process.GetCurrentProcess().Handle, out _, out ushort native))
-                {
-                    if (native == ImageFileMachineArm64)
-                        return "arm64";
-                    if (native == ImageFileMachineAmd64)
-                        return "x86_64";
-                    if (native == ImageFileMachineI386)
-                        return "i686";
-                }
-            }
-            catch (EntryPointNotFoundException)
-            {
-                // Before Windows 10 1709.
-            }
-            return Environment.Is64BitOperatingSystem ? "x86_64" : "i686";
-        }
-
         /// <summary>
         /// Starts the component once to see that Windows can run it. On Windows 7 without the required updates it
         /// stops at once with a missing system function.
@@ -448,18 +400,31 @@ namespace Campfire.Link.Runtime
             }
         }
 
-        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
-        private static extern IntPtr AddDllDirectory(string newDirectory);
+        private static void EnsureExecutable()
+        {
+            foreach (string file in Files)
+                File.SetUnixFileMode(Path.Combine(InstallDirectory, file), UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        }
 
-        [DllImport("kernel32.dll", SetLastError = true)]
-        private static extern bool RemoveDllDirectory(IntPtr cookie);
-
-        private const ushort ImageFileMachineI386 = 0x014C;
-        private const ushort ImageFileMachineAmd64 = 0x8664;
-        private const ushort ImageFileMachineArm64 = 0xAA64;
-
-        [DllImport("kernel32.dll", SetLastError = true)]
-        private static extern bool IsWow64Process2(IntPtr process, out ushort processMachine, out ushort nativeMachine);
+        /// <summary>Offline installation of the exact original upstream Linux release archive.</summary>
+        public static void InstallArchive(string archive)
+        {
+            if (!IsSupportedSystem) throw new PlatformNotSupportedException("This port supports Linux x86_64 only.");
+            if (!string.Equals(ComputeHash(archive), ArchiveSha256, StringComparison.OrdinalIgnoreCase))
+                throw new InvalidDataException("The archive is not the pinned upstream EasyTier 2.6.4 Linux x86_64 release.");
+            Directory.CreateDirectory(InstallDirectory);
+            using (var zip = ZipFile.OpenRead(archive))
+                foreach (string file in Files)
+                {
+                    var entry = zip.Entries.Single(e => MatchesEntry(e.FullName, file));
+                    string temporary = TempPath(file);
+                    entry.ExtractToFile(temporary, true);
+                    CommitFile(file, temporary);
+                }
+            lock (Sync) _verified = Files.All(IsFileValid);
+            if (!_verified) throw new InvalidDataException("Component verification failed.");
+            EnsureExecutable();
+        }
 
         private sealed class Source
         {

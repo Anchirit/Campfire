@@ -1,14 +1,12 @@
+# Keep upstream C# checkout bytes stable for provenance checks.
 * text=auto
-
-*.cs      text eol=crlf
-*.xaml    text eol=crlf
-*.csproj  text eol=crlf
-*.slnx    text eol=crlf
-*.manifest text eol=crlf
-*.md      text eol=lf
-*.yml     text eol=lf
-
-*.png binary
-*.jpg binary
-*.ico binary
-
+*.cs text eol=crlf
+*.csproj text eol=lf
+*.md text eol=lf
+*.sh text eol=lf
+*.py text eol=lf
+*.json text eol=lf
+*.txt text eol=lf
+*.java text eol=lf
+campfire text eol=lf
+*.jar binary

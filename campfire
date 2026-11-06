@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+set -euo pipefail
+root="$(cd "$(dirname "$0")" && pwd)"
+if [[ -x "$root/artifacts/linux-x64/campfire" ]]; then
+    exec "$root/artifacts/linux-x64/campfire" "$@"
+fi
+if command -v dotnet >/dev/null 2>&1 && [[ -f "$root/src/Campfire/bin/Release/net8.0/campfire.dll" ]]; then
+    exec dotnet "$root/src/Campfire/bin/Release/net8.0/campfire.dll" "$@"
+fi
+echo 'Build first with bash scripts/build.sh, or use a distribution containing artifacts/linux-x64.' >&2
+exit 1

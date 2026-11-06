@@ -80,7 +80,7 @@ namespace Campfire.Link
                 return Done(DiagState.Fail, "Diag.System.Old");
             if (EasyTierPackage.IsWindows7 && !EasyTierPackage.HasLoaderUpdate)
                 return Done(DiagState.Fail, "Diag.System.Windows7");
-            return Done(DiagState.Ok, "Diag.System.Ok", EasyTierPackage.WindowsVersion, EasyTierPackage.Architecture);
+            return Done(DiagState.Ok, "Diag.System.Ok", Environment.OSVersion.Version, EasyTierPackage.Architecture);
         }
 
         private static async Task<DiagResult> CheckComponent(CancellationToken token)

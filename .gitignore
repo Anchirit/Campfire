@@ -1,17 +1,6 @@
-# Build output
-bin/
-obj/
+**/bin/
+**/obj/
 artifacts/
-*.user
-*.suo
-
-# IDE
-.vs/
-.idea/
-.vscode/
-
-# Binaries: launchers, their backups and third-party libraries must never be committed
-*.dll
-*.exe
-*.exe.bak
-*.campfire.tmp
+*.log
+__pycache__/
+*.pyc

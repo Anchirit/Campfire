@@ -3,7 +3,6 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Security;
-using Microsoft.Win32;
 
 namespace Campfire.Worlds
 {
@@ -52,33 +51,10 @@ namespace Campfire.Worlds
         /// <param name="launcherDirectories">Folders that hold a launcher, such as the one Campfire found to repair.</param>
         public static IReadOnlyList<GameFolder> Find(IEnumerable<string> launcherDirectories)
         {
-            var found = new List<GameFolder>();
-            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-
-            void Add(string path, GameFolderSource source)
-            {
-                string full = Clean(path);
-                if (full != null && seen.Add(full) && Directory.Exists(System.IO.Path.Combine(full, "versions")))
-                    found.Add(new GameFolder(full, source));
-            }
-
-            Add(System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), ".minecraft"),
-                GameFolderSource.Default);
-
-            foreach (string directory in (launcherDirectories ?? Enumerable.Empty<string>()).Where(d => !string.IsNullOrEmpty(d)).Distinct(StringComparer.OrdinalIgnoreCase))
-            {
-                Add(System.IO.Path.Combine(directory, ".minecraft"), GameFolderSource.NextToLauncher);
-                foreach (string folder in ReadLocalLauncherSettings(directory))
-                    Add(folder, GameFolderSource.LauncherSettings);
-            }
-
-            foreach (string folder in ReadRegistryFolders())
-                Add(folder, GameFolderSource.LauncherSettings);
-
-            foreach (string folder in Added)
-                Add(folder, GameFolderSource.Added);
-
-            return found;
+            var paths = new[] { Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".minecraft") }
+                .Concat(Added).Distinct(StringComparer.Ordinal);
+            return paths.Where(p => Directory.Exists(Path.Combine(p, "versions")))
+                .Select(p => new GameFolder(p, GameFolderSource.Default)).ToList();
         }
 
         /// <summary>Folders the user added by hand, kept across runs.</summary>
@@ -88,7 +64,7 @@ namespace Campfire.Worlds
         public static void Add(string path)
         {
             string full = Clean(path);
-            if (full == null || Added.Contains(full, StringComparer.OrdinalIgnoreCase))
+            if (full == null || Added.Contains(full, StringComparer.Ordinal))
                 return;
             AppSettings.Set(AddedKey, string.Join("|", Added.Concat(new[] { full })));
         }
@@ -96,7 +72,7 @@ namespace Campfire.Worlds
         public static void Remove(string path)
         {
             string full = Clean(path);
-            var rest = Added.Where(p => !string.Equals(p, full, StringComparison.OrdinalIgnoreCase)).ToList();
+            var rest = Added.Where(p => !string.Equals(p, full, StringComparison.Ordinal)).ToList();
             AppSettings.Set(AddedKey, rest.Count == 0 ? null : string.Join("|", rest));
         }
 
@@ -119,87 +95,10 @@ namespace Campfire.Worlds
             for (int level = 0; level < 2 && current != null; level++, current = System.IO.Path.GetDirectoryName(current))
             {
                 string parent = System.IO.Path.GetDirectoryName(current);
-                if (parent != null && string.Equals(System.IO.Path.GetFileName(current), "versions", StringComparison.OrdinalIgnoreCase))
+                if (parent != null && string.Equals(System.IO.Path.GetFileName(current), "versions", StringComparison.Ordinal))
                     return parent;
             }
             return null;
-        }
-
-        /// <summary>
-        /// The launcher keeps the selected folder in a text file beside it: "PCL\config.v1.yml" with
-        /// "Key: value" lines, or "PCL\Setup.ini" with "Key:value" lines, depending on the build.
-        /// </summary>
-        private static IEnumerable<string> ReadLocalLauncherSettings(string directory)
-        {
-            foreach (string file in new[] { "config.v1.yml", "Setup.ini" })
-            {
-                string path = System.IO.Path.Combine(directory, "PCL", file);
-                foreach (string line in ReadLines(path))
-                {
-                    string value = ValueOf(line, "LaunchFolderSelect");
-                    if (value != null)
-                        yield return value;
-                    value = ValueOf(line, "LaunchFolders");
-                    if (value != null)
-                    {
-                        foreach (string folder in SplitFolderList(value))
-                            yield return folder;
-                    }
-                }
-            }
-        }
-
-        /// <summary>The folder list the launcher keeps in the registry.</summary>
-        private static IEnumerable<string> ReadRegistryFolders()
-        {
-            string value;
-            try
-            {
-                using (var key = Registry.CurrentUser.OpenSubKey(@"Software\PCL"))
-                    value = key?.GetValue("LaunchFolders") as string;
-            }
-            catch (Exception ex) when (ex is SecurityException || ex is UnauthorizedAccessException || ex is IOException)
-            {
-                value = null;
-            }
-            return SplitFolderList(value);
-        }
-
-        /// <summary>
-        /// Folder lists are "name>path" items separated by '|'. Items without a name are plain paths; anything
-        /// that is not an existing folder is ignored later.
-        /// </summary>
-        private static IEnumerable<string> SplitFolderList(string value)
-        {
-            if (string.IsNullOrWhiteSpace(value))
-                yield break;
-            foreach (string item in value.Split('|'))
-            {
-                string path = item.Contains(">") ? item.Substring(item.IndexOf('>') + 1) : item;
-                if (path.Trim().Length > 0)
-                    yield return path.Trim();
-            }
-        }
-
-        private static string ValueOf(string line, string key)
-        {
-            string trimmed = line.TrimStart('﻿', ' ');
-            if (!trimmed.StartsWith(key + ":", StringComparison.Ordinal))
-                return null;
-            string value = trimmed.Substring(key.Length + 1).Trim().Trim('"', '\'');
-            return value.Length == 0 ? null : value;
-        }
-
-        private static IEnumerable<string> ReadLines(string path)
-        {
-            try
-            {
-                return File.Exists(path) ? File.ReadAllLines(path) : new string[0];
-            }
-            catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException)
-            {
-                return new string[0];
-            }
         }
 
         private static string Clean(string path)

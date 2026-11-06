@@ -267,8 +267,7 @@ namespace Campfire.Link
         /// <summary>Custom nodes first, then the enabled built-in nodes, without duplicates.</summary>
         public static IReadOnlyList<string> GetNodes()
         {
-            return ParseNodes(CustomNodes, out _)
-                .Concat(PublicNodes.All.Where(IsNodeEnabled).Select(n => n.Url))
+            return PublicNodes.All.Where(IsNodeEnabled).Select(n => n.Url)
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .ToList();
         }
